@@ -1,1 +1,1 @@
-# schizophrenia-gan-cnn
+# CNNs and GANs to Identify Schizophrenia
