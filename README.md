@@ -1,1 +1,5 @@
 # CNNs and GANs to Identify Schizophrenia
+## Introduction
+Schizophrenia is a severe psychiatric disorder affecting approximately 1% of the global population. Diagnosis currently relies on clinical interviews and behavioral observation, which are inherently subjective and prone to inconsistency. Neuroimaging research — particularly structural and functional MRI — has identified measurable brain abnormalities associated with schizophrenia, such as reduced gray matter volume, enlarged ventricles, and altered prefrontal connectivity. This raises the possibility of objective, imaging-based diagnostic support tools powered by machine learning. 
+
+A major obstacle in building such tools is the scarcity of labeled neuroimaging data. Clinical datasets are small due to privacy constraints, the cost of MRI acquisition, and the difficulty of recruiting patients. Small datasets cause CNNs to overfit and generalize poorly. Data augmentation is a well-established solution, and GANs represent a state of the art solution for generating realistic synthetic medical images.
