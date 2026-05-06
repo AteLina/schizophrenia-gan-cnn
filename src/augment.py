@@ -70,6 +70,10 @@ class DCGAN_Generator(nn.Module):
 
 
 def dcgan_train():
+
+    #making sure proper checkpoint directory exists
+    Path("checkpoints/dcgan").mkdir(parents=True, exist_ok=True)
+
     #first, we define hyperparameters, initailzie models, and define optimizers and loss criteria 
     num_epochs = 200 
     batch_size = 16
@@ -150,6 +154,10 @@ def dcgan_generate(G, num_images = 1000):
 def stylegan_train(): 
     #convention for using StyleGAN2-ADA. Subprocess allows us to run StyleGAN2 training from command line. 
     #we are using starting weights from pretrained FFHQ model.
+
+    #ensuring proper checkpoints directory exists
+    Path("checkpoints/stylegan").mkdir(parents=True, exist_ok=True)
+
     subprocess.run([
         "python", "stylegan2-ada-pytorch/train.py",
         "--outdir=checkpoints/stylegan",
@@ -189,7 +197,13 @@ def traditional_augment():
 
 
 def main_augment(): 
+    
     #main_augment() runs DCGAN and Style GAN training and generation + traditional augmentation.
+
+    #making sure proper directories exist
+    Path("data/augmented/dcgan").mkdir(parents=True, exist_ok=True)
+    Path("data/augmented/stylegan").mkdir(parents=True, exist_ok=True)
+    Path("data/augmented/traditional").mkdir(parents=True, exist_ok=True)
 
     #DCGAN Training + Generation
 
