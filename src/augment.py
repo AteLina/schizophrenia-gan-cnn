@@ -3,7 +3,7 @@
 #2) DCGAN 
 #3) StyleGAN 
 
-from matplotlib import image, transforms
+from torchvision import transforms
 import torch
 import torch.nn as nn
 import torch.optim as optim 
@@ -15,6 +15,9 @@ from pathlib import Path
 real_data_path = Path("data/real_data")
 
 from torchvision.utils import save_image
+
+
+import subprocess
 
 
 real_images = 'placeholder'
@@ -121,9 +124,11 @@ def dcgan_train():
             opt_g.step()     
 
 
-            torch.save(G.state_dict(), "checkpoints/dcgan_generator_saved.pt")
+        #after training, we will save Generator weights so that we do not have to retrain every time. 
 
-            return G 
+        torch.save(G.state_dict(), "checkpoints/dcgan_generator_saved.pt")
+
+        return G 
 
 
 #num_images tells us how many "fake" images we want the dcgan to generate, by default. 
@@ -143,11 +148,27 @@ def dcgan_generate(G, num_images = 1000):
 
 
 def stylegan_train(): 
-    pass
+    #convention for using StyleGAN2-ADA. Subprocess allows us to run StyleGAN2 training from command line. 
+    #we are using starting weights from pretrained FFHQ model.
+    subprocess.run([
+        "python", "stylegan2-ada-pytorch/train.py",
+        "--outdir=checkpoints/stylegan",
+        "--data=data/real_data",
+        "--resume=checkpoints/stylegan/ffhq.pkl",
+        "--kimg=1000",
+    ])
 
 
-def stylegan_generate():
-    pass                   
+def stylegan_generate(num_images = 1000): 
+      
+      #storing stylegan_generated photos to data/augmented/stylegan directory
+      subprocess.run([
+        "python", "stylegan2-ada-pytorch/generate.py",
+        "--outdir=data/augmented/stylegan",
+        f"--seeds=0-{num_images}",
+        "--network=checkpoints/stylegan/ffhq.pkl",
+    ])
+    
 
 def traditional_augment(num_images = 1000): 
     #for traditional augmentation, we will use combination of 3 transformations: rotation, zoom, and brightness and contrast
@@ -167,10 +188,23 @@ def traditional_augment(num_images = 1000):
 
 
 def main_augment(): 
+    #main_augment() runs DCGAN and Style GAN training and generation + traditional augmentation.
+
     #DCGAN Training + Generation
-    G = dcgan_train()
+
+    #if we have already traiend the Generator and have the weights saved, we just load the weights and skip retraining. 
+    #Otherwise, we run dcgan_train()
+    if Path("checkpoints/dcgan_generator_saved.pt").exists():
+        G = DCGAN_Generator()
+        G.load_state_dict(torch.load("checkpoints/dcgan_generator_saved.pt"))
+    else:
+        G = dcgan_train()
+    
     dcgan_generate(G)
 
     #StyleGAN Training + Generation 
     stylegan_train()
     stylegan_generate()
+
+    #Traditional Augmentation
+    traditional_augment()
