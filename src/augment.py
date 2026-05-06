@@ -208,7 +208,7 @@ def main_augment():
     #DCGAN Training + Generation
 
     #if we have already traiend the Generator and have the weights saved, we just load the weights and skip retraining. 
-    #Otherwise, we run dcgan_train()
+    #Otherwise, we need to train the dcGAN. 
     if Path("checkpoints/dcgan_generator_saved.pt").exists():
         G = DCGAN_Generator()
         G.load_state_dict(torch.load("checkpoints/dcgan_generator_saved.pt"))
@@ -218,6 +218,13 @@ def main_augment():
     dcgan_generate(G)
 
     #StyleGAN Training + Generation 
+    #if ffhq.pkl is not already downlaoded, we run terminal command to download it. 
+    if not Path("checkpoints/stylegan/ffhq.pkl").exists():
+        Path("checkpoints/stylegan").mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            "curl", "-L", "-o", "checkpoints/stylegan/ffhq.pkl",
+            "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl"
+        ])
     stylegan_train()
     stylegan_generate()
 
