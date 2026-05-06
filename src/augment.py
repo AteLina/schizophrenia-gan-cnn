@@ -126,9 +126,9 @@ def dcgan_train():
 
         #after training, we will save Generator weights so that we do not have to retrain every time. 
 
-        torch.save(G.state_dict(), "checkpoints/dcgan_generator_saved.pt")
+    torch.save(G.state_dict(), "checkpoints/dcgan_generator_saved.pt")
 
-        return G 
+    return G 
 
 
 #num_images tells us how many "fake" images we want the dcgan to generate, by default. 
@@ -170,8 +170,9 @@ def stylegan_generate(num_images = 1000):
     ])
     
 
-def traditional_augment(num_images = 1000): 
+def traditional_augment(): 
     #for traditional augmentation, we will use combination of 3 transformations: rotation, zoom, and brightness and contrast
+    #we will exactly double the amount of data, as we are applying the transform once to each image in real_images. 
     
     transform = transforms.Compose([
         transforms.RandomRotation(15), 
