@@ -15,6 +15,7 @@ from torchvision.utils import save_image
 from PIL import Image
 
 import subprocess
+import argparse
 
 
 # Paths
@@ -35,6 +36,7 @@ else:
 
 print(f"Using device: {DEVICE}")
 
+
 # Dataset
 class MRISliceDataset(Dataset):
 
@@ -48,7 +50,6 @@ class MRISliceDataset(Dataset):
         self.transform = transforms.Compose([
             transforms.Grayscale(num_output_channels=1),
 
-            # IMPORTANT:
             # DCGAN architecture below is built for 64x64
             transforms.Resize((64, 64)),
 
@@ -143,11 +144,10 @@ class DCGAN_Generator(nn.Module):
 
 
 # DCGAN Training
-def dcgan_train():
+def dcgan_train(num_epochs=50):
 
     (CKPT_DIR / "dcgan").mkdir(parents=True, exist_ok=True)
 
-    num_epochs = 200
     batch_size = 16
     noise_dim = 128
 
@@ -296,7 +296,7 @@ def dcgan_generate(G, num_images=1000):
 
 
 # StyleGAN2-ADA Training
-def stylegan_train():
+def stylegan_train(kimg=200):
 
     if DEVICE.type == "cpu":
         print("Skipping StyleGAN training because CUDA is unavailable.")
@@ -334,7 +334,7 @@ def stylegan_train():
 
         f"--resume={ffhq_pkl}",
 
-        "--kimg=1000",
+        f"--kimg={kimg}",
 
         "--augpipe=ada",
 
@@ -417,14 +417,16 @@ def traditional_augment():
 
 
 # Main
-def main_augment():
+def main_augment(
+    dcgan_epochs=50,
+    stylegan_kimg=200
+):
 
     (AUG_DIR / "dcgan").mkdir(parents=True, exist_ok=True)
 
     (AUG_DIR / "stylegan").mkdir(parents=True, exist_ok=True)
 
     (AUG_DIR / "traditional").mkdir(parents=True, exist_ok=True)
-
 
     # DCGAN
     dcgan_ckpt = CKPT_DIR / "dcgan/dcgan_generator_saved.pt"
@@ -448,7 +450,7 @@ def main_augment():
 
         print("Training DCGAN...")
 
-        G = dcgan_train()
+        G = dcgan_train(num_epochs=dcgan_epochs)
 
     print("Generating DCGAN images...")
 
@@ -457,7 +459,7 @@ def main_augment():
     # StyleGAN
     print("Training StyleGAN2-ADA...")
 
-    stylegan_train()
+    stylegan_train(kimg=stylegan_kimg)
 
     print("Generating StyleGAN images...")
 
@@ -472,4 +474,92 @@ def main_augment():
 
 
 if __name__ == "__main__":
-    main_augment()
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="all",
+        choices=[
+            "all",
+            "traditional",
+            "dcgan",
+            "stylegan"
+        ],
+        help="Which augmentation pipeline to run"
+    )
+
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=50,
+        help="Number of DCGAN training epochs"
+    )
+
+    parser.add_argument(
+        "--kimg",
+        type=int,
+        default=200,
+        help="StyleGAN2-ADA kimg value"
+    )
+
+    args = parser.parse_args()
+
+    # Traditional Augmentation Only
+    if args.mode == "traditional":
+
+        print("Running traditional augmentation only...")
+
+        traditional_augment()
+
+    # DCGAN Only
+    elif args.mode == "dcgan":
+
+        print("Running DCGAN only...")
+
+        dcgan_ckpt = CKPT_DIR / "dcgan/dcgan_generator_saved.pt"
+
+        if dcgan_ckpt.exists():
+
+            print("Loading existing DCGAN weights...")
+
+            G = DCGAN_Generator()
+
+            G.load_state_dict(
+                torch.load(
+                    dcgan_ckpt,
+                    map_location=DEVICE
+                )
+            )
+
+            G.to(DEVICE)
+
+        else:
+
+            print("Training DCGAN...")
+
+            G = dcgan_train(num_epochs=args.epochs)
+
+        print("Generating DCGAN images...")
+
+        dcgan_generate(G)
+
+    # StyleGAN Only
+    elif args.mode == "stylegan":
+
+        print("Running StyleGAN2-ADA only...")
+
+        stylegan_train(kimg=args.kimg)
+
+        stylegan_generate()
+
+    # Run Everything
+    else:
+
+        print("Running full augmentation pipeline...")
+
+        main_augment(
+            dcgan_epochs=args.epochs,
+            stylegan_kimg=args.kimg
+        )
