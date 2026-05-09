@@ -1,0 +1,42 @@
+---
+title: "schizo_gan_data_cleaning"
+author: "Nicholas Enbar-Salo"
+format: html
+editor: visual
+---
+
+# schizo_gan_data_cleaning: A data cleaning script to standardize column names and diagnostic coades between datasets
+```{r}
+# Load libraries
+library(conflicted)
+library(tidyverse)
+
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+
+# Read in files
+cobre <- read.table("/Users/nenbarsalo/Downloads/schizophrenia_project/data/raw/cobre/participants.tsv", header=TRUE, sep="\t")
+ucla <- read.table("/Users/nenbarsalo/Downloads/schizophrenia_project/data/raw/ucla_cnp/participants.tsv", header=TRUE, sep="\t")
+```
+
+# Clean to make diagnostic codes and column names the same
+```{r}
+ucla_cleaned <- ucla |>
+  select(id = participant_id, diagnosis = diagnosis) |>
+  filter(diagnosis == "CONTROL" | diagnosis == "SCHZ")
+
+cobre_cleaned <- cobre |>
+  select(id = participant_id, diagnosis = condit) |>
+  mutate(diagnosis = recode(diagnosis, 
+    "SCZ"     = "SCHZ",
+    "CON"     = "CONTROL",
+    "CON-SIB" = "CONTROL",
+    "SCZ-SIB" = "SCHZ"
+  )) 
+```
+
+# Saves
+```{r}
+write.table(ucla_cleaned, "/Users/nenbarsalo/Downloads/schizophrenia_project/data/raw/ucla_cnp/participants_ucla_cleaned.tsv", sep="\t", row.names=FALSE, quote=FALSE)
+write.table(cobre_cleaned, "/Users/nenbarsalo/Downloads/schizophrenia_project/data/raw/cobre/participants_cobre_cleaned.tsv", sep="\t", row.names=FALSE, quote=FALSE)
+```
