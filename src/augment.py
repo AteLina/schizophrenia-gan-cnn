@@ -1,7 +1,7 @@
-# need to train and generate
+# Augmentation pipeline
 # 1) Traditional Augmentation
 # 2) DCGAN
-# 3) StyleGAN
+# 3) PatchGAN
 
 from torchvision import transforms
 import torch
@@ -14,19 +14,23 @@ from pathlib import Path
 from torchvision.utils import save_image
 from PIL import Image
 
-import subprocess
 import argparse
 
-
 # Paths
-BASE_DIR       = Path("/content/drive/MyDrive/schizophrenia_gan")
-real_data_path = BASE_DIR / "data/slices/schizophrenia"
+BASE_DIR = Path("/content/drive/MyDrive/schizophrenia_gan")
+HEALTHY_DIR = BASE_DIR / "data/slices/healthy"
+SCHIZO_DIR = BASE_DIR / "data/slices/schizophrenia"
 
-AUG_DIR  = BASE_DIR / "data/augmented"
+AUG_DIR = BASE_DIR / "data/augmented"
 CKPT_DIR = BASE_DIR / "checkpoints"
 
+# Create labels and other constants
+LABEL_HEALTHY = 0
+LABEL_SCHIZO = 1
+NUM_CLASSES = 2
+CLASS_NAMES = {LABEL_HEALTHY: "healthy", LABEL_SCHIZO: "schizophrenia"}
 
-# Device
+# backend work, ensure cuda is used if available to minimize runtime
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
 elif torch.backends.mps.is_available():
@@ -37,46 +41,60 @@ else:
 print(f"Using device: {DEVICE}")
 
 
-# Dataset
 class MRISliceDataset(Dataset):
+    """Loads PNGs from healthy/ and schizophrenia/ subdirectories."""
 
-    def __init__(self, data_dir: Path):
+    def __init__(self, healthy_dir: Path, schizo_dir: Path):
 
-        self.paths = sorted(list(data_dir.glob("*.png")))
+        healthy_paths = sorted(healthy_dir.glob("*.png"))
+        schizo_paths = sorted(schizo_dir.glob("*.png"))
 
-        if len(self.paths) == 0:
-            raise RuntimeError(f"No PNG files found in {data_dir}")
+        if not healthy_paths:
+            raise RuntimeError(f"No PNG files found in {healthy_dir}")
+        if not schizo_paths:
+            raise RuntimeError(f"No PNG files found in {schizo_dir}")
+
+        # (path, label) pairs
+        self.samples = (
+                [(p, LABEL_HEALTHY) for p in healthy_paths] +
+                [(p, LABEL_SCHIZO) for p in schizo_paths]
+        )
 
         self.transform = transforms.Compose([
             transforms.Grayscale(num_output_channels=1),
-
-            # DCGAN architecture below is built for 64x64
             transforms.Resize((64, 64)),
-
             transforms.ToTensor(),
-
-            # Normalize to [-1,1]
-            transforms.Normalize([0.5], [0.5]),
+            transforms.Normalize([0.5], [0.5]),  # → [-1, 1]
         ])
 
     def __len__(self):
-        return len(self.paths)
+        return len(self.samples)
 
     def __getitem__(self, idx):
+        path, label = self.samples[idx]
+        img = Image.open(path).convert("L")
+        return self.transform(img), label
 
-        img = Image.open(self.paths[idx]).convert("L")
 
-        return self.transform(img)
+#  DCGAN
 
-
-# DCGAN Discriminator
 class DCGAN_Discriminator(nn.Module):
+    """
+    Conditional DCGAN discriminator.
+    The class label is embedded and broadcast as extra channels so the
+    discriminator learns what 'real' looks like *per class*.
+    """
 
-    def __init__(self, channels=1):
-
+    def __init__(self, channels: int = 1, num_classes: int = NUM_CLASSES, img_size: int = 64):
         super().__init__()
 
-        self.conv1 = nn.Conv2d(channels, 64, 4, 2, 1)
+        self.img_size = img_size
+
+        # One embedding vector per class, projected to a full feature map
+        self.label_emb = nn.Embedding(num_classes, img_size * img_size)
+
+        # Input: image channel + label channel = channels + 1
+        self.conv1 = nn.Conv2d(channels + 1, 64, 4, 2, 1)
 
         self.conv2 = nn.Conv2d(64, 128, 4, 2, 1)
         self.bn2 = nn.BatchNorm2d(128)
@@ -87,32 +105,41 @@ class DCGAN_Discriminator(nn.Module):
         self.conv4 = nn.Conv2d(256, 512, 4, 2, 1)
         self.bn4 = nn.BatchNorm2d(512)
 
-        # 4x4 -> 1x1
-        self.conv5 = nn.Conv2d(512, 1, 4, 1, 0)
+        self.conv5 = nn.Conv2d(512, 1, 4, 1, 0)  # 4×4 → 1×1
 
-    def forward(self, x):
+    def forward(self, x, labels):
+        b = x.size(0)
+
+        # Embed label → (b, 1, H, W)
+        label_map = self.label_emb(labels).view(b, 1, self.img_size, self.img_size)
+
+        x = torch.cat([x, label_map], dim=1)
 
         x = F.leaky_relu(self.conv1(x), 0.2)
-
         x = F.leaky_relu(self.bn2(self.conv2(x)), 0.2)
-
         x = F.leaky_relu(self.bn3(self.conv3(x)), 0.2)
-
         x = F.leaky_relu(self.bn4(self.conv4(x)), 0.2)
-
         x = self.conv5(x)
 
         return x
 
 
-# DCGAN Generator
 class DCGAN_Generator(nn.Module):
+    """
+    Conditional DCGAN generator.
+    Noise and label embedding are concatenated before the first deconv.
+    """
 
-    def __init__(self, noise_dim=128, channels=1):
-
+    def __init__(self, noise_dim: int = 128, channels: int = 1, num_classes: int = NUM_CLASSES):
         super().__init__()
 
-        self.conv1 = nn.ConvTranspose2d(noise_dim, 512, 4, 1, 0)
+        self.noise_dim = noise_dim
+        self.label_dim = 32  # size of the label embedding
+        in_dim = noise_dim + self.label_dim
+
+        self.label_emb = nn.Embedding(num_classes, self.label_dim)
+
+        self.conv1 = nn.ConvTranspose2d(in_dim, 512, 4, 1, 0)
         self.bn1 = nn.BatchNorm2d(512)
 
         self.conv2 = nn.ConvTranspose2d(512, 256, 4, 2, 1)
@@ -126,440 +153,464 @@ class DCGAN_Generator(nn.Module):
 
         self.conv5 = nn.ConvTranspose2d(64, channels, 4, 2, 1)
 
-    def forward(self, x):
-
+    def forward(self, noise, labels):
+        label_emb = self.label_emb(labels)
+        x = torch.cat([noise, label_emb], dim=1)
         x = x.view(x.size(0), -1, 1, 1)
 
         x = F.relu(self.bn1(self.conv1(x)))
-
         x = F.relu(self.bn2(self.conv2(x)))
-
         x = F.relu(self.bn3(self.conv3(x)))
-
         x = F.relu(self.bn4(self.conv4(x)))
-
         x = torch.tanh(self.conv5(x))
 
         return x
 
 
-# DCGAN Training
-def dcgan_train(num_epochs=50):
-
+def dcgan_train(num_epochs: int = 50) -> DCGAN_Generator:
     (CKPT_DIR / "dcgan").mkdir(parents=True, exist_ok=True)
 
     batch_size = 16
     noise_dim = 128
 
-    loss_criteria = nn.BCEWithLogitsLoss()
+    loss_fn = nn.BCEWithLogitsLoss()
 
-    G = DCGAN_Generator().to(DEVICE)
+    G = DCGAN_Generator(noise_dim=noise_dim).to(DEVICE)
     D = DCGAN_Discriminator().to(DEVICE)
 
     G.train()
     D.train()
 
     opt_g = optim.Adam(G.parameters(), lr=0.0002, betas=(0.5, 0.999))
-
     opt_d = optim.Adam(D.parameters(), lr=0.0002, betas=(0.5, 0.999))
 
-    dataset = MRISliceDataset(real_data_path)
-
+    dataset = MRISliceDataset(HEALTHY_DIR, SCHIZO_DIR)
     dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=2,
-        drop_last=True,
-        pin_memory=True
+        dataset, batch_size=batch_size, shuffle=True,
+        num_workers=2, drop_last=True, pin_memory=True
     )
 
     for epoch in range(num_epochs):
 
-        for batch in dataloader:
-
-            real_images = batch.to(DEVICE)
-
+        for real_images, labels in dataloader:
+            real_images = real_images.to(DEVICE)
+            labels = labels.to(DEVICE)
             b = real_images.size(0)
 
-            # Train Discriminator
+            # Discriminator
             opt_d.zero_grad()
 
-            # REAL
-            d_predictions_real = D(real_images)
+            pred_real = D(real_images, labels)
+            loss_d_real = loss_fn(pred_real, torch.ones_like(pred_real))
 
-            labels_real = torch.ones_like(d_predictions_real).to(DEVICE)
-
-            loss_d_real = loss_criteria(
-                d_predictions_real,
-                labels_real
-            )
-
-            # FAKE
-            noise = torch.randn(b, noise_dim).to(DEVICE)
-
-            fake_images = G(noise).detach()
-
-            d_predictions_fake = D(fake_images)
-
-            labels_fake = torch.zeros_like(d_predictions_fake).to(DEVICE)
-
-            loss_d_fake = loss_criteria(
-                d_predictions_fake,
-                labels_fake
-            )
+            noise = torch.randn(b, noise_dim, device=DEVICE)
+            fake_imgs = G(noise, labels).detach()
+            pred_fake = D(fake_imgs, labels)
+            loss_d_fake = loss_fn(pred_fake, torch.zeros_like(pred_fake))
 
             loss_d = loss_d_real + loss_d_fake
-
             loss_d.backward()
-
             opt_d.step()
 
-            # Train Generator
+            # Generator
             opt_g.zero_grad()
 
-            noise = torch.randn(b, noise_dim).to(DEVICE)
-
-            fake_images = G(noise)
-
-            d_predictions = D(fake_images)
-
-            labels_generator = torch.ones_like(d_predictions).to(DEVICE)
-
-            loss_g = loss_criteria(
-                d_predictions,
-                labels_generator
-            )
+            noise = torch.randn(b, noise_dim, device=DEVICE)
+            fake_imgs = G(noise, labels)
+            pred = D(fake_imgs, labels)
+            loss_g = loss_fn(pred, torch.ones_like(pred))
 
             loss_g.backward()
-
             opt_g.step()
 
         print(
-            f"Epoch [{epoch+1}/{num_epochs}] "
-            f"loss_G={loss_g.item():.4f} "
-            f"loss_D={loss_d.item():.4f}"
+            f"[DCGAN] Epoch [{epoch + 1}/{num_epochs}]  "
+            f"loss_G={loss_g.item():.4f}  loss_D={loss_d.item():.4f}"
         )
 
-        # Save samples
+        # Save sample grid every 20 epochs
         if (epoch + 1) % 20 == 0:
-
             sample_dir = CKPT_DIR / "dcgan/samples"
-
             sample_dir.mkdir(exist_ok=True)
 
             with torch.no_grad():
-
-                sample_noise = torch.randn(16, noise_dim).to(DEVICE)
-
-                fake_samples = G(sample_noise)
-
+                # 8 healthy + 8 schizophrenia
+                sample_noise = torch.randn(16, noise_dim, device=DEVICE)
+                sample_labels = torch.tensor(
+                    [LABEL_HEALTHY] * 8 + [LABEL_SCHIZO] * 8, device=DEVICE
+                )
+                fake_samples = G(sample_noise, sample_labels)
                 save_image(
                     fake_samples,
-                    sample_dir / f"epoch_{epoch+1:04d}.png",
-                    nrow=4,
-                    normalize=True
+                    sample_dir / f"epoch_{epoch + 1:04d}.png",
+                    nrow=8, normalize=True
                 )
 
-    torch.save(
-        G.state_dict(),
-        CKPT_DIR / "dcgan/dcgan_generator_saved.pt"
-    )
+    torch.save(G.state_dict(), CKPT_DIR / "dcgan/dcgan_generator_saved.pt")
 
     return G
 
 
-# DCGAN Generation
-def dcgan_generate(G, num_images=1000):
+def dcgan_generate(G: DCGAN_Generator, num_images_per_class: int = 500):
+    """Generate `num_images_per_class` images for each class label."""
 
     G.eval()
-
     G.to(DEVICE)
 
-    out_dir = AUG_DIR / "dcgan"
+    noise_dim = G.noise_dim
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    for label_idx, class_name in CLASS_NAMES.items():
 
-    noise = torch.randn(num_images, 128).to(DEVICE)
+        out_dir = AUG_DIR / "dcgan" / class_name
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    with torch.no_grad():
+        labels = torch.full((num_images_per_class,), label_idx,
+                            dtype=torch.long, device=DEVICE)
+        noise = torch.randn(num_images_per_class, noise_dim, device=DEVICE)
 
-        fake_images = G(noise)
+        with torch.no_grad():
+            fake_images = G(noise, labels)
 
-        for i, image in enumerate(fake_images):
+        for i, img in enumerate(fake_images):
+            save_image(img, out_dir / f"dcgan_{class_name}_{i:05d}.png", normalize=True)
 
-            save_image(
-                image,
-                out_dir / f"dcgan_image_{i:05d}.png",
-                normalize=True
+        print(f"[DCGAN] Saved {num_images_per_class} images → {out_dir}")
+
+
+#  PatchGAN
+
+class PatchGAN_Discriminator(nn.Module):
+    """
+    70×70 PatchGAN discriminator (conditional).
+    Outputs a grid of real/fake scores rather than a single scalar —
+    each score corresponds to a 70×70 patch of the input image.
+    """
+
+    def __init__(self, channels: int = 1, num_classes: int = NUM_CLASSES, img_size: int = 64):
+        super().__init__()
+
+        self.img_size = img_size
+
+        # Label → spatial feature map (same as DCGAN_D)
+        self.label_emb = nn.Embedding(num_classes, img_size * img_size)
+
+        def block(in_c, out_c, stride, normalise=True):
+            layers = [nn.Conv2d(in_c, out_c, kernel_size=4, stride=stride, padding=1, bias=False)]
+            if normalise:
+                layers.append(nn.InstanceNorm2d(out_c, affine=True))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            return nn.Sequential(*layers)
+
+        # Input channels = image channel + label channel
+        self.model = nn.Sequential(
+            block(channels + 1, 64, stride=2, normalise=False),  # 64 → 32
+            block(64, 128, stride=2),  # 32 → 16
+            block(128, 256, stride=2),  # 16 →  8
+            block(256, 512, stride=1),  # 8 →  8
+            nn.Conv2d(512, 1, kernel_size=4, stride=1, padding=1),  # 8 →  7
+        )
+
+    def forward(self, x, labels):
+        b = x.size(0)
+        label_map = self.label_emb(labels).view(b, 1, self.img_size, self.img_size)
+        x = torch.cat([x, label_map], dim=1)
+        return self.model(x)
+
+
+class PatchGAN_Generator(nn.Module):
+
+    def __init__(self, noise_dim: int = 128, channels: int = 1, num_classes: int = NUM_CLASSES):
+        super().__init__()
+
+        self.noise_dim = noise_dim
+        self.label_dim = 32
+        in_dim = noise_dim + self.label_dim
+
+        self.label_emb = nn.Embedding(num_classes, self.label_dim)
+
+        def up_block(in_c, out_c):
+            return nn.Sequential(
+                nn.ConvTranspose2d(in_c, out_c, 4, 2, 1, bias=False),
+                nn.InstanceNorm2d(out_c, affine=True),
+                nn.ReLU(inplace=True),
             )
 
+        self.proj = nn.Sequential(
+            nn.ConvTranspose2d(in_dim, 512, 4, 1, 0, bias=False),  # → 4×4
+            nn.InstanceNorm2d(512, affine=True),
+            nn.ReLU(inplace=True),
+        )
 
-# StyleGAN2-ADA Training
-def stylegan_train(kimg=200):
+        self.up1 = up_block(512, 256)  # 4  →  8
+        self.up2 = up_block(256, 128)  # 8  → 16
+        self.up3 = up_block(128, 64)  # 16 → 32
+        self.up4 = up_block(64, 32)  # 32 → 64
 
-    if DEVICE.type == "cpu":
-        print("Skipping StyleGAN training because CUDA is unavailable.")
-        return
+        self.out_conv = nn.Sequential(
+            nn.Conv2d(32, channels, 3, 1, 1),
+            nn.Tanh(),
+        )
 
-    (CKPT_DIR / "stylegan").mkdir(parents=True, exist_ok=True)
+    def forward(self, noise, labels):
+        label_emb = self.label_emb(labels)
+        x = torch.cat([noise, label_emb], dim=1).view(-1, self.noise_dim + self.label_dim, 1, 1)
 
-    if not Path("stylegan2-ada-pytorch").exists():
+        x = self.proj(x)
+        x = self.up1(x)
+        x = self.up2(x)
+        x = self.up3(x)
+        x = self.up4(x)
 
-        subprocess.run([
-            "git",
-            "clone",
-            "https://github.com/NVlabs/stylegan2-ada-pytorch.git"
-        ])
-
-    ffhq_pkl = CKPT_DIR / "stylegan/ffhq.pkl"
-
-    if not ffhq_pkl.exists():
-
-        subprocess.run([
-            "curl",
-            "-L",
-            "-o",
-            str(ffhq_pkl),
-            "https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/ffhq.pkl"
-        ])
-
-    subprocess.run([
-        "python",
-        "stylegan2-ada-pytorch/train.py",
-
-        f"--outdir={CKPT_DIR / 'stylegan'}",
-
-        f"--data={real_data_path}",
-
-        f"--resume={ffhq_pkl}",
-
-        f"--kimg={kimg}",
-
-        "--augpipe=ada",
-
-        "--mirror=1",
-
-        "--gpus=1",
-    ])
+        return self.out_conv(x)
 
 
-# StyleGAN Generation
-def stylegan_generate(num_images=1000):
+def patchgan_train(num_epochs: int = 50) -> PatchGAN_Generator:
+    (CKPT_DIR / "patchgan").mkdir(parents=True, exist_ok=True)
 
-    out_dir = AUG_DIR / "stylegan"
+    batch_size = 16
+    noise_dim = 128
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # LSGAN loss (MSE) works better with PatchGAN than BCE
+    loss_fn = nn.MSELoss()
 
-    snapshots = sorted(
-        (CKPT_DIR / "stylegan").glob("**/network-snapshot-*.pkl")
+    G = PatchGAN_Generator(noise_dim=noise_dim).to(DEVICE)
+    D = PatchGAN_Discriminator().to(DEVICE)
+
+    G.train()
+    D.train()
+
+    opt_g = optim.Adam(G.parameters(), lr=0.0002, betas=(0.5, 0.999))
+    opt_d = optim.Adam(D.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+    dataset = MRISliceDataset(HEALTHY_DIR, SCHIZO_DIR)
+    dataloader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=True,
+        num_workers=2, drop_last=True, pin_memory=True
     )
 
-    if not snapshots:
+    for epoch in range(num_epochs):
 
-        print("No StyleGAN snapshots found.")
-        return
+        for real_images, labels in dataloader:
+            real_images = real_images.to(DEVICE)
+            labels = labels.to(DEVICE)
+            b = real_images.size(0)
 
-    latest_ckpt = snapshots[-1]
+            # Discriminator
+            opt_d.zero_grad()
 
-    subprocess.run([
-        "python",
-        "stylegan2-ada-pytorch/generate.py",
+            pred_real = D(real_images, labels)
+            # loss, real = 1, fake = 0
+            loss_d_real = loss_fn(pred_real, torch.ones_like(pred_real))
 
-        f"--outdir={out_dir}",
+            noise = torch.randn(b, noise_dim, device=DEVICE)
+            fake_imgs = G(noise, labels).detach()
+            pred_fake = D(fake_imgs, labels)
+            loss_d_fake = loss_fn(pred_fake, torch.zeros_like(pred_fake))
 
-        f"--seeds=0-{num_images - 1}",
+            loss_d = 0.5 * (loss_d_real + loss_d_fake)
+            loss_d.backward()
+            opt_d.step()
 
-        f"--network={latest_ckpt}",
-    ])
+            # Generator
+            opt_g.zero_grad()
+
+            noise = torch.randn(b, noise_dim, device=DEVICE)
+            fake_imgs = G(noise, labels)
+            pred = D(fake_imgs, labels)
+            loss_g = loss_fn(pred, torch.ones_like(pred))
+
+            loss_g.backward()
+            opt_g.step()
+
+        print(
+            f"[PatchGAN] Epoch [{epoch + 1}/{num_epochs}]  "
+            f"loss_G={loss_g.item():.4f}  loss_D={loss_d.item():.4f}"
+        )
+
+        # Save sample grid every 20 epochs
+        if (epoch + 1) % 20 == 0:
+            sample_dir = CKPT_DIR / "patchgan/samples"
+            sample_dir.mkdir(exist_ok=True)
+
+            with torch.no_grad():
+                sample_noise = torch.randn(16, noise_dim, device=DEVICE)
+                sample_labels = torch.tensor(
+                    [LABEL_HEALTHY] * 8 + [LABEL_SCHIZO] * 8, device=DEVICE
+                )
+                fake_samples = G(sample_noise, sample_labels)
+                save_image(
+                    fake_samples,
+                    sample_dir / f"epoch_{epoch + 1:04d}.png",
+                    nrow=8, normalize=True
+                )
+
+    torch.save(G.state_dict(), CKPT_DIR / "patchgan/patchgan_generator_saved.pt")
+
+    return G
 
 
-# Traditional Augmentation
+def patchgan_generate(G: PatchGAN_Generator, num_images_per_class: int = 500):
+    """Generate `num_images_per_class` images for each class label."""
+
+    G.eval()
+    G.to(DEVICE)
+
+    noise_dim = G.noise_dim
+
+    for label_idx, class_name in CLASS_NAMES.items():
+
+        out_dir = AUG_DIR / "patchgan" / class_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        labels = torch.full((num_images_per_class,), label_idx,
+                            dtype=torch.long, device=DEVICE)
+        noise = torch.randn(num_images_per_class, noise_dim, device=DEVICE)
+
+        with torch.no_grad():
+            fake_images = G(noise, labels)
+
+        for i, img in enumerate(fake_images):
+            save_image(img, out_dir / f"patchgan_{class_name}_{i:05d}.png", normalize=True)
+
+        print(f"[PatchGAN] Saved {num_images_per_class} images → {out_dir}")
+
+
+#  Traditional Augmentation
+
 def traditional_augment():
-
-    out_dir = AUG_DIR / "traditional"
-
-    out_dir.mkdir(parents=True, exist_ok=True)
+    """Apply random transforms to every real image; keep healthy/schizophrenia split."""
 
     transform = transforms.Compose([
-
         transforms.Grayscale(num_output_channels=1),
-
         transforms.RandomHorizontalFlip(p=0.5),
-
         transforms.RandomRotation(10),
-
-        transforms.RandomResizedCrop(
-            64,
-            scale=(0.85, 1.0)
-        ),
-
-        transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2
-        ),
-
+        transforms.RandomResizedCrop(64, scale=(0.85, 1.0)),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2),
         transforms.ToTensor(),
     ])
 
-    png_files = sorted(real_data_path.glob("*.png"))
+    sources = {
+        LABEL_HEALTHY: HEALTHY_DIR,
+        LABEL_SCHIZO: SCHIZO_DIR,
+    }
 
-    for path in png_files:
+    for label_idx, src_dir in sources.items():
+        class_name = CLASS_NAMES[label_idx]
+        out_dir = AUG_DIR / "traditional" / class_name
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-        image = Image.open(path).convert("L")
+        png_files = sorted(src_dir.glob("*.png"))
 
-        image_augmented = transform(image)
+        for path in png_files:
+            img = Image.open(path).convert("L")
+            aug_img = transform(img)
+            save_image(aug_img, out_dir / f"{path.stem}_aug.png")
 
-        save_image(
-            image_augmented,
-            out_dir / f"{path.stem}_aug.png"
-        )
+        print(f"[Traditional] Augmented {len(png_files)} images → {out_dir}")
 
 
-# Main
-def main_augment(
-    dcgan_epochs=50,
-    stylegan_kimg=200
-):
+#  Full Pipeline
 
-    (AUG_DIR / "dcgan").mkdir(parents=True, exist_ok=True)
+def _load_or_train_dcgan(epochs: int) -> DCGAN_Generator:
+    ckpt = CKPT_DIR / "dcgan/dcgan_generator_saved.pt"
+    G = DCGAN_Generator()
 
-    (AUG_DIR / "stylegan").mkdir(parents=True, exist_ok=True)
-
-    (AUG_DIR / "traditional").mkdir(parents=True, exist_ok=True)
-
-    # DCGAN
-    dcgan_ckpt = CKPT_DIR / "dcgan/dcgan_generator_saved.pt"
-
-    if dcgan_ckpt.exists():
-
-        print("Loading existing DCGAN weights...")
-
-        G = DCGAN_Generator()
-
-        G.load_state_dict(
-            torch.load(
-                dcgan_ckpt,
-                map_location=DEVICE
-            )
-        )
-
+    if ckpt.exists():
+        print("[DCGAN] Loading existing weights...")
+        G.load_state_dict(torch.load(ckpt, map_location=DEVICE))
         G.to(DEVICE)
-
     else:
+        print("[DCGAN] Training from scratch...")
+        G = dcgan_train(num_epochs=epochs)
 
-        print("Training DCGAN...")
+    return G
 
-        G = dcgan_train(num_epochs=dcgan_epochs)
 
-    print("Generating DCGAN images...")
+def _load_or_train_patchgan(epochs: int) -> PatchGAN_Generator:
+    ckpt = CKPT_DIR / "patchgan/patchgan_generator_saved.pt"
+    G = PatchGAN_Generator()
 
-    dcgan_generate(G)
+    if ckpt.exists():
+        print("[PatchGAN] Loading existing weights...")
+        G.load_state_dict(torch.load(ckpt, map_location=DEVICE))
+        G.to(DEVICE)
+    else:
+        print("[PatchGAN] Training from scratch...")
+        G = patchgan_train(num_epochs=epochs)
 
-    # StyleGAN
-    print("Training StyleGAN2-ADA...")
+    return G
 
-    stylegan_train(kimg=stylegan_kimg)
 
-    print("Generating StyleGAN images...")
+def main_augment(dcgan_epochs: int = 50, patchgan_epochs: int = 50):
+    # DCGAN
+    G_dcgan = _load_or_train_dcgan(dcgan_epochs)
+    print("[DCGAN] Generating images...")
+    dcgan_generate(G_dcgan)
 
-    stylegan_generate()
+    # PatchGAN
+    G_patch = _load_or_train_patchgan(patchgan_epochs)
+    print("[PatchGAN] Generating images...")
+    patchgan_generate(G_patch)
 
-    # Traditional Augmentation
-    print("Generating traditional augmentations...")
-
+    # Traditional
+    print("[Traditional] Augmenting images...")
     traditional_augment()
 
-    print("Done.")
+    print("\nAll done. Output tree:")
+    print(f"  {AUG_DIR}/")
+    print(f"  ├── dcgan/healthy/          ← {500} images")
+    print(f"  ├── dcgan/schizophrenia/    ← {500} images")
+    print(f"  ├── patchgan/healthy/       ← {500} images")
+    print(f"  ├── patchgan/schizophrenia/ ← {500} images")
+    print(f"  ├── traditional/healthy/    ← one augmented copy per real image")
+    print(f"  └── traditional/schizophrenia/")
 
+
+#  create formatting for augment_main
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="MRI slice augmentation pipeline")
 
     parser.add_argument(
         "--mode",
         type=str,
         default="all",
-        choices=[
-            "all",
-            "traditional",
-            "dcgan",
-            "stylegan"
-        ],
-        help="Which augmentation pipeline to run"
+        choices=["all", "traditional", "dcgan", "patchgan"],
+        help="Which augmentation pipeline to run (default: all)",
     )
-
     parser.add_argument(
         "--epochs",
         type=int,
         default=50,
-        help="Number of DCGAN training epochs"
+        help="Training epochs for DCGAN and/or PatchGAN (default: 50)",
     )
-
     parser.add_argument(
-        "--kimg",
+        "--num_images",
         type=int,
-        default=200,
-        help="StyleGAN2-ADA kimg value"
+        default=500,
+        help="Number of synthetic images to generate *per class* for GAN methods (default: 500)",
     )
 
     args = parser.parse_args()
 
-    # Traditional Augmentation Only
     if args.mode == "traditional":
-
         print("Running traditional augmentation only...")
-
         traditional_augment()
 
-    # DCGAN Only
     elif args.mode == "dcgan":
-
         print("Running DCGAN only...")
+        G = _load_or_train_dcgan(args.epochs)
+        dcgan_generate(G, num_images_per_class=args.num_images)
 
-        dcgan_ckpt = CKPT_DIR / "dcgan/dcgan_generator_saved.pt"
+    elif args.mode == "patchgan":
+        print("Running PatchGAN only...")
+        G = _load_or_train_patchgan(args.epochs)
+        patchgan_generate(G, num_images_per_class=args.num_images)
 
-        if dcgan_ckpt.exists():
-
-            print("Loading existing DCGAN weights...")
-
-            G = DCGAN_Generator()
-
-            G.load_state_dict(
-                torch.load(
-                    dcgan_ckpt,
-                    map_location=DEVICE
-                )
-            )
-
-            G.to(DEVICE)
-
-        else:
-
-            print("Training DCGAN...")
-
-            G = dcgan_train(num_epochs=args.epochs)
-
-        print("Generating DCGAN images...")
-
-        dcgan_generate(G)
-
-    # StyleGAN Only
-    elif args.mode == "stylegan":
-
-        print("Running StyleGAN2-ADA only...")
-
-        stylegan_train(kimg=args.kimg)
-
-        stylegan_generate()
-
-    # Run Everything
     else:
-
         print("Running full augmentation pipeline...")
-
         main_augment(
             dcgan_epochs=args.epochs,
-            stylegan_kimg=args.kimg
+            patchgan_epochs=args.epochs,
         )
