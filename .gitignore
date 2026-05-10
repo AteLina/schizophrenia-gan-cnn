@@ -1,4 +1,23 @@
-checkpoints/
+# Data (large files, private under data use agreements)
+data/raw/
 data/augmented/
-*.pkl
+data/preprocessed/
+data/slices/
 
+# Generated model checkpoints
+checkpoints/
+results/*.pt
+
+# Python
+*.pkl
+__pycache__/
+*.pyc
+*.pyo
+
+# Mac system files
+.DS_Store
+**/.DS_Store
+
+# Editor settings
+.vscode/
+.idea/
