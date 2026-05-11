@@ -1,6 +1,22 @@
-# Full MRI preprocessing pipeline: skull stripping → registration → bias correction →
-# ComBat harmonization → z-score normalization → slice extraction
-# Datasets: UCLA CNP (ds000030) + COBRE (ds000115)
+"""
+Full MRI preprocessing pipeline for schizophrenia classification.
+Datasets: UCLA CNP (ds000030) + COBRE (ds000115)
+
+Pipeline steps:
+    1. Skull stripping          — HD-BET
+    2. Registration             — ANTsPy (MNI152 standard space)
+    3. Bias field correction    — ANTsPy N4
+    4. ComBat harmonization     — neuroCombat (across scanner sites)
+    5. Z-score normalization    — per scan
+    6. Slice extraction         — middle 70 axial slices → 256x256 PNG
+
+Usage:
+    python preprocess.py \
+        --ucla_dir   data/raw/ucla_cnp \
+        --cobre_dir  data/raw/cobre \
+        --out_dir    data/preprocessed \
+        --slices_dir data/slices
+"""
 
 # Imports
 import os
