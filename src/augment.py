@@ -41,8 +41,8 @@ else:
 print(f"Using device: {DEVICE}")
 
 
+# Loads PNG brain MRI slices from healthy/ and schizophrenia/ directories
 class MRISliceDataset(Dataset):
-    """Loads PNGs from healthy/ and schizophrenia/ subdirectories."""
 
     def __init__(self, healthy_dir: Path, schizo_dir: Path):
 
@@ -76,14 +76,10 @@ class MRISliceDataset(Dataset):
         return self.transform(img), label
 
 
-#  DCGAN
+# DCGAN
 
+# DCGAN discriminator — judges whether an image is real or fake, conditioned on class label
 class DCGAN_Discriminator(nn.Module):
-    """
-    Conditional DCGAN discriminator.
-    The class label is embedded and broadcast as extra channels so the
-    discriminator learns what 'real' looks like *per class*.
-    """
 
     def __init__(self, channels: int = 1, num_classes: int = NUM_CLASSES, img_size: int = 64):
         super().__init__()
@@ -124,11 +120,8 @@ class DCGAN_Discriminator(nn.Module):
         return x
 
 
+# DCGAN generator — creates synthetic brain images from noise and class label
 class DCGAN_Generator(nn.Module):
-    """
-    Conditional DCGAN generator.
-    Noise and label embedding are concatenated before the first deconv.
-    """
 
     def __init__(self, noise_dim: int = 128, channels: int = 1, num_classes: int = NUM_CLASSES):
         super().__init__()
@@ -167,6 +160,7 @@ class DCGAN_Generator(nn.Module):
         return x
 
 
+# Trains the DCGAN on the full MRI dataset, saves weights, returns the generator
 def dcgan_train(num_epochs: int = 50) -> DCGAN_Generator:
     (CKPT_DIR / "dcgan").mkdir(parents=True, exist_ok=True)
 
@@ -251,8 +245,8 @@ def dcgan_train(num_epochs: int = 50) -> DCGAN_Generator:
     return G
 
 
+# Generates num_images_per_class synthetic images per class, saves to data/augmented/dcgan/
 def dcgan_generate(G: DCGAN_Generator, num_images_per_class: int = 500):
-    """Generate `num_images_per_class` images for each class label."""
 
     G.eval()
     G.to(DEVICE)
@@ -277,14 +271,10 @@ def dcgan_generate(G: DCGAN_Generator, num_images_per_class: int = 500):
         print(f"[DCGAN] Saved {num_images_per_class} images → {out_dir}")
 
 
-#  PatchGAN
+# PatchGAN
 
+# PatchGAN discriminator — scores overlapping 70×70 patches as real or fake, conditioned on class label
 class PatchGAN_Discriminator(nn.Module):
-    """
-    70×70 PatchGAN discriminator (conditional).
-    Outputs a grid of real/fake scores rather than a single scalar —
-    each score corresponds to a 70×70 patch of the input image.
-    """
 
     def __init__(self, channels: int = 1, num_classes: int = NUM_CLASSES, img_size: int = 64):
         super().__init__()
@@ -317,6 +307,7 @@ class PatchGAN_Discriminator(nn.Module):
         return self.model(x)
 
 
+# PatchGAN generator — creates synthetic brain images using upsampling blocks
 class PatchGAN_Generator(nn.Module):
 
     def __init__(self, noise_dim: int = 128, channels: int = 1, num_classes: int = NUM_CLASSES):
@@ -364,6 +355,7 @@ class PatchGAN_Generator(nn.Module):
         return self.out_conv(x)
 
 
+# Trains the PatchGAN on the full MRI dataset, saves weights, returns the generator
 def patchgan_train(num_epochs: int = 50) -> PatchGAN_Generator:
     (CKPT_DIR / "patchgan").mkdir(parents=True, exist_ok=True)
 
@@ -449,8 +441,8 @@ def patchgan_train(num_epochs: int = 50) -> PatchGAN_Generator:
     return G
 
 
+# Generates num_images_per_class synthetic images per class, saves to data/augmented/patchgan/
 def patchgan_generate(G: PatchGAN_Generator, num_images_per_class: int = 500):
-    """Generate `num_images_per_class` images for each class label."""
 
     G.eval()
     G.to(DEVICE)
@@ -475,10 +467,10 @@ def patchgan_generate(G: PatchGAN_Generator, num_images_per_class: int = 500):
         print(f"[PatchGAN] Saved {num_images_per_class} images → {out_dir}")
 
 
-#  Traditional Augmentation
+# Traditional Augmentation
 
+# Applies random transforms to each real image and saves augmented copies to data/augmented/traditional/
 def traditional_augment():
-    """Apply random transforms to every real image; keep healthy/schizophrenia split."""
 
     transform = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
@@ -509,8 +501,9 @@ def traditional_augment():
         print(f"[Traditional] Augmented {len(png_files)} images → {out_dir}")
 
 
-#  Full Pipeline
+# Full Pipeline
 
+# Loads existing DCGAN weights if available, otherwise trains from scratch
 def _load_or_train_dcgan(epochs: int) -> DCGAN_Generator:
     ckpt = CKPT_DIR / "dcgan/dcgan_generator_saved.pt"
     G = DCGAN_Generator()
@@ -526,6 +519,7 @@ def _load_or_train_dcgan(epochs: int) -> DCGAN_Generator:
     return G
 
 
+# Loads existing PatchGAN weights if available, otherwise trains from scratch
 def _load_or_train_patchgan(epochs: int) -> PatchGAN_Generator:
     ckpt = CKPT_DIR / "patchgan/patchgan_generator_saved.pt"
     G = PatchGAN_Generator()
@@ -541,6 +535,7 @@ def _load_or_train_patchgan(epochs: int) -> PatchGAN_Generator:
     return G
 
 
+# Runs the full augmentation pipeline: DCGAN, PatchGAN, and traditional
 def main_augment(dcgan_epochs: int = 50, patchgan_epochs: int = 50):
     # DCGAN
     G_dcgan = _load_or_train_dcgan(dcgan_epochs)
@@ -566,7 +561,7 @@ def main_augment(dcgan_epochs: int = 50, patchgan_epochs: int = 50):
     print(f"  └── traditional/schizophrenia/")
 
 
-#  create formatting for augment_main
+# Parse command-line arguments
 
 if __name__ == "__main__":
 

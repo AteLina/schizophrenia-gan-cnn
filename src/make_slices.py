@@ -1,27 +1,5 @@
-"""
-make_slices.py
-==============
-Standalone script to convert already-preprocessed bias_corrected.nii.gz files
- into 256x256 PNG slices
-
-Use this when preprocessing was interrupted partway through — it works on
-whatever subjects are already done.
-
-Pipeline:
-    1. Scan preprocessed_dir for subjects with bias_corrected.nii.gz
-    2. Load subjects.csv to get diagnosis labels
-    3. ComBat harmonization across completed subjects
-    4. Z-score normalization per scan
-    5. Extract middle 70 axial slices → 256x256 PNG
-
-Usage:
-    python make_slices.py \
-        --preprocessed_dir /content/drive/MyDrive/schizophrenia_gan/data/preprocessed \
-        --slices_dir       /content/drive/MyDrive/schizophrenia_gan/data/slices
-
-Requirements:
-    pip install neuroCombat nibabel numpy Pillow tqdm pandas
-"""
+# Converts already-preprocessed bias_corrected.nii.gz files into 256x256 PNG slices
+# Use this when preprocessing was interrupted — it picks up from whatever is already done
 
 import argparse
 import logging
@@ -40,23 +18,16 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTS
-# ─────────────────────────────────────────────────────────────────────────────
+# Constants
 
 N_SLICES    = 70
 OUT_SIZE    = (256, 256)
 RANDOM_SEED = 42
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 — FIND COMPLETED SUBJECTS
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 1 — Find completed subjects
 
+# Scans preprocessed_dir for finished subjects and joins with subjects.csv to get labels and site
 def find_completed_subjects(preprocessed_dir: Path, subjects_csv: Path) -> pd.DataFrame:
-    """
-    Scan preprocessed_dir for subjects that have bias_corrected.nii.gz,
-    then join with subjects.csv to get labels and site info.
-    """
     # Load the subject manifest written by preprocess.py
     if not subjects_csv.exists():
         raise FileNotFoundError(
@@ -86,15 +57,10 @@ def find_completed_subjects(preprocessed_dir: Path, subjects_csv: Path) -> pd.Da
     return completed_df
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — COMBAT HARMONIZATION
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 2 — ComBat harmonization
 
+# Runs ComBat across scanner sites and returns a dict of subject_id → harmonized numpy volume
 def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
-    """
-    Run ComBat harmonization across scanner sites on completed subjects only.
-    Returns dict: subject_id -> harmonized numpy volume array.
-    """
     try:
         from neuroCombat import neuroCombat
     except ImportError:
@@ -171,12 +137,10 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     return harmonized
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — Z-SCORE NORMALIZATION
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 3 — Z-score normalization
 
+# Z-score normalizes a 3D volume using only brain voxels (non-zero mask)
 def zscore_normalize(volume: np.ndarray) -> np.ndarray:
-    """Z-score normalize using brain voxels only (non-zero mask)."""
     mask = volume > 0
     if mask.sum() == 0:
         return volume
@@ -189,10 +153,9 @@ def zscore_normalize(volume: np.ndarray) -> np.ndarray:
     return normalized
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 — SLICE EXTRACTION → PNG
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 4 — Slice extraction
 
+# Extracts the middle n_slices axial slices from a volume and saves them as 256x256 PNGs
 def extract_slices(
     volume: np.ndarray,
     subject_id: str,
@@ -201,10 +164,6 @@ def extract_slices(
     n_slices: int = N_SLICES,
     out_size: tuple = OUT_SIZE,
 ) -> list:
-    """
-    Extract the middle n_slices axial slices → 256x256 PNG.
-    Saves to slices_dir/schizophrenia/ or slices_dir/healthy/.
-    """
     class_name = "schizophrenia" if label == 1 else "healthy"
     out_dir    = slices_dir / class_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -237,10 +196,9 @@ def extract_slices(
     return saved
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
+# Main
 
+# Orchestrates all steps: find subjects, harmonize, normalize, extract slices, save manifest
 def run(args):
     preprocessed_dir = Path(args.preprocessed_dir).expanduser()
     slices_dir       = Path(args.slices_dir).expanduser()
@@ -293,9 +251,7 @@ def run(args):
     log.info(f"  Slice manifest: {slices_dir / 'slice_manifest.csv'}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
+# Entry point
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
