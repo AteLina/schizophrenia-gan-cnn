@@ -6,10 +6,14 @@ editor: visual
 ---
 
 # schizo_gan_data_cleaning: A data cleaning script to standardize column names and diagnostic coades between datasets
+
 ```{r}
 # Load libraries
 library(conflicted)
 library(tidyverse)
+library(gtsummary)
+library(gt)
+library(webshot2)
 
 conflict_prefer("filter", "dplyr")
 conflict_prefer("select", "dplyr")
@@ -20,22 +24,67 @@ ucla <- read.table("/Users/nenbarsalo/Downloads/schizophrenia_project/data/raw/u
 ```
 
 # Clean to make diagnostic codes and column names the same
+
 ```{r}
 ucla_cleaned <- ucla |>
-  select(id = participant_id, diagnosis = diagnosis) |>
-  filter(diagnosis == "CONTROL" | diagnosis == "SCHZ")
+  rename(id = participant_id, diagnosis = diagnosis) |>
+  filter(diagnosis == "CONTROL" | diagnosis == "SCHZ") |>
+  mutate(
+    gender = recode(gender,
+    "M" = "Male",
+    "F" = "Female")
+  )
 
 cobre_cleaned <- cobre |>
-  select(id = participant_id, diagnosis = condit) |>
+  rename(id = participant_id, diagnosis = condit) |>
   mutate(diagnosis = recode(diagnosis, 
     "SCZ"     = "SCHZ",
     "CON"     = "CONTROL",
     "CON-SIB" = "CONTROL",
-    "SCZ-SIB" = "SCHZ"
-  )) 
+    "SCZ-SIB" = "SCHZ"),
+    gender = recode(gender,
+    "MALE" = "Male",
+    "FEMALE" = "Female")) 
+
+# Combine datasets
+joined_data <- bind_rows(
+  ucla_cleaned |> 
+    select(id, diagnosis, age, gender),
+  
+  cobre_cleaned |> 
+    select(id, diagnosis, age, gender)
+)
+
+
 ```
 
-# Saves
+# Demographics 
+```{r}
+# Create demographics table stratified by diagnosis
+demographics_table <- joined_data |>
+  select(diagnosis, age, gender) |>
+  tbl_summary(
+    by = diagnosis,
+    statistic = list(
+      age ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = all_continuous() ~ 2
+  ) |>
+  add_p() |>
+  bold_labels()
+
+# Convert to gt table
+demographics_gt <- demographics_table |>
+  as_gt()
+
+# Save table
+gtsave(demographics_gt, filename = "demographics_table.png")
+demographics_gt
+```
+
+# Dataset Saves
+
 ```{r}
 write.table(ucla_cleaned, "/Users/nenbarsalo/Downloads/schizophrenia_project/data/raw/ucla_cnp/participants_ucla_cleaned.tsv", sep="\t", row.names=FALSE, quote=FALSE)
 write.table(cobre_cleaned, "/Users/nenbarsalo/Downloads/schizophrenia_project/data/raw/cobre/participants_cobre_cleaned.tsv", sep="\t", row.names=FALSE, quote=FALSE)
