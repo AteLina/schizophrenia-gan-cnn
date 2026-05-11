@@ -1,8 +1,19 @@
-# Augmentation pipeline
-# 1) Traditional Augmentation
-# 2) DCGAN
-# 3) PatchGAN
+"""
+GAN training and synthetic image generation for MRI augmentation.
 
+Augmentation methods (run all three or choose one with --mode):
+    1. Traditional augmentation   — random flip, rotation, crop, color jitter
+    2. DCGAN                      — conditional DCGAN, 500 images per class
+    3. PatchGAN                   — conditional PatchGAN, 500 images per class
+
+Usage:
+    python augment.py --mode all
+    python augment.py --mode dcgan    --epochs 50 --num_images 500
+    python augment.py --mode patchgan --epochs 50 --num_images 500
+    python augment.py --mode traditional
+"""
+
+# Imports
 from torchvision import transforms
 import torch
 import torch.nn as nn
