@@ -41,7 +41,7 @@ LABEL_SCHIZO = 1
 NUM_CLASSES = 2
 CLASS_NAMES = {LABEL_HEALTHY: "healthy", LABEL_SCHIZO: "schizophrenia"}
 
-# backend work, ensure cuda is used if available to minimize runtime
+# Backend work, ensure cuda is used if available to minimize runtime
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
 elif torch.backends.mps.is_available():
@@ -75,7 +75,7 @@ class MRISliceDataset(Dataset):
             transforms.Grayscale(num_output_channels=1),
             transforms.Resize((64, 64)),
             transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),  # → [-1, 1]
+            transforms.Normalize([0.5], [0.5]), # → [-1, 1]
         ])
 
     def __len__(self):
@@ -86,10 +86,9 @@ class MRISliceDataset(Dataset):
         img = Image.open(path).convert("L")
         return self.transform(img), label
 
-
 # DCGAN
 
-# DCGAN discriminator — judges whether an image is real or fake, conditioned on class label
+# DCGAN discriminator judges whether an image is real or fake, conditioned on class label
 class DCGAN_Discriminator(nn.Module):
 
     def __init__(self, channels: int = 1, num_classes: int = NUM_CLASSES, img_size: int = 64):
@@ -112,7 +111,7 @@ class DCGAN_Discriminator(nn.Module):
         self.conv4 = nn.Conv2d(256, 512, 4, 2, 1)
         self.bn4 = nn.BatchNorm2d(512)
 
-        self.conv5 = nn.Conv2d(512, 1, 4, 1, 0)  # 4×4 → 1×1
+        self.conv5 = nn.Conv2d(512, 1, 4, 1, 0) # 4×4 → 1×1
 
     def forward(self, x, labels):
         b = x.size(0)
@@ -130,15 +129,14 @@ class DCGAN_Discriminator(nn.Module):
 
         return x
 
-
-# DCGAN generator — creates synthetic brain images from noise and class label
+# DCGAN generator creates synthetic brain images from noise and class label
 class DCGAN_Generator(nn.Module):
 
     def __init__(self, noise_dim: int = 128, channels: int = 1, num_classes: int = NUM_CLASSES):
         super().__init__()
 
         self.noise_dim = noise_dim
-        self.label_dim = 32  # size of the label embedding
+        self.label_dim = 32 # size of the label embedding
         in_dim = noise_dim + self.label_dim
 
         self.label_emb = nn.Embedding(num_classes, self.label_dim)
@@ -169,7 +167,6 @@ class DCGAN_Generator(nn.Module):
         x = torch.tanh(self.conv5(x))
 
         return x
-
 
 # Trains the DCGAN on the full MRI dataset, saves weights, returns the generator
 def dcgan_train(num_epochs: int = 50) -> DCGAN_Generator:
@@ -255,7 +252,6 @@ def dcgan_train(num_epochs: int = 50) -> DCGAN_Generator:
 
     return G
 
-
 # Generates num_images_per_class synthetic images per class, saves to data/augmented/dcgan/
 def dcgan_generate(G: DCGAN_Generator, num_images_per_class: int = 500):
 
@@ -281,10 +277,9 @@ def dcgan_generate(G: DCGAN_Generator, num_images_per_class: int = 500):
 
         print(f"[DCGAN] Saved {num_images_per_class} images → {out_dir}")
 
-
 # PatchGAN
 
-# PatchGAN discriminator — scores overlapping 70×70 patches as real or fake, conditioned on class label
+# PatchGAN discriminator scores overlapping 70×70 patches as real or fake, conditioned on class label
 class PatchGAN_Discriminator(nn.Module):
 
     def __init__(self, channels: int = 1, num_classes: int = NUM_CLASSES, img_size: int = 64):
@@ -318,7 +313,7 @@ class PatchGAN_Discriminator(nn.Module):
         return self.model(x)
 
 
-# PatchGAN generator — creates synthetic brain images using upsampling blocks
+# PatchGAN generator creates synthetic brain images using upsampling blocks
 class PatchGAN_Generator(nn.Module):
 
     def __init__(self, noise_dim: int = 128, channels: int = 1, num_classes: int = NUM_CLASSES):
@@ -364,7 +359,6 @@ class PatchGAN_Generator(nn.Module):
         x = self.up4(x)
 
         return self.out_conv(x)
-
 
 # Trains the PatchGAN on the full MRI dataset, saves weights, returns the generator
 def patchgan_train(num_epochs: int = 50) -> PatchGAN_Generator:
@@ -451,7 +445,6 @@ def patchgan_train(num_epochs: int = 50) -> PatchGAN_Generator:
 
     return G
 
-
 # Generates num_images_per_class synthetic images per class, saves to data/augmented/patchgan/
 def patchgan_generate(G: PatchGAN_Generator, num_images_per_class: int = 500):
 
@@ -476,7 +469,6 @@ def patchgan_generate(G: PatchGAN_Generator, num_images_per_class: int = 500):
             save_image(img, out_dir / f"patchgan_{class_name}_{i:05d}.png", normalize=True)
 
         print(f"[PatchGAN] Saved {num_images_per_class} images → {out_dir}")
-
 
 # Traditional Augmentation
 
@@ -511,7 +503,6 @@ def traditional_augment():
 
         print(f"[Traditional] Augmented {len(png_files)} images → {out_dir}")
 
-
 # Full Pipeline
 
 # Loads existing DCGAN weights if available, otherwise trains from scratch
@@ -529,7 +520,6 @@ def _load_or_train_dcgan(epochs: int) -> DCGAN_Generator:
 
     return G
 
-
 # Loads existing PatchGAN weights if available, otherwise trains from scratch
 def _load_or_train_patchgan(epochs: int) -> PatchGAN_Generator:
     ckpt = CKPT_DIR / "patchgan/patchgan_generator_saved.pt"
@@ -544,7 +534,6 @@ def _load_or_train_patchgan(epochs: int) -> PatchGAN_Generator:
         G = patchgan_train(num_epochs=epochs)
 
     return G
-
 
 # Runs the full augmentation pipeline: DCGAN, PatchGAN, and traditional
 def main_augment(dcgan_epochs: int = 50, patchgan_epochs: int = 50):
@@ -571,8 +560,9 @@ def main_augment(dcgan_epochs: int = 50, patchgan_epochs: int = 50):
     print(f"  ├── traditional/healthy/    ← one augmented copy per real image")
     print(f"  └── traditional/schizophrenia/")
 
-
 # Parse command-line arguments
+
+# Main
 
 if __name__ == "__main__":
 
