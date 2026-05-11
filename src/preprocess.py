@@ -2,6 +2,7 @@
 # ComBat harmonization → z-score normalization → slice extraction
 # Datasets: UCLA CNP (ds000030) + COBRE (ds000115)
 
+# Imports
 import os
 import argparse
 import logging
@@ -14,9 +15,7 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
-# imported inside functions so the script can be inspected without full env
-
-
+# Imported inside functions so the script can be inspected without full env
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -25,7 +24,6 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # Constants
-
 SLICE_AXIS = 2  # axial = z-axis
 N_SLICES = 70  # number of middle slices to extract
 OUT_SIZE = (256, 256)  # resize target
@@ -36,9 +34,6 @@ RANDOM_SEED = 42
 # with columns: id, diagnosis (values: SCHZ or CONTROL)
 SCZ_LABEL = "SCHZ"
 HC_LABEL = "CONTROL"
-
-
-# Step 0 — Collect subjects
 
 # Walks dataset directories and builds a subject table with subject_id, t1_path, label, site, dataset
 def collect_subjects(ucla_dir: Path, cobre_dir: Path, nusdast_dir: Path = None) -> pd.DataFrame:
@@ -122,9 +117,8 @@ def collect_subjects(ucla_dir: Path, cobre_dir: Path, nusdast_dir: Path = None) 
     log.info(f"  COBRE:   {(df.dataset == 'cobre').sum()} subjects")
     log.info(f"  NUSDAST: {(df.dataset == 'nusdast').sum()} subjects")
     return df
-
-
-# Step 1 — Skull stripping
+    
+# Skull stripping
 
 # Runs HD-BET skull stripping and returns path to the brain-extracted file
 def skull_strip(t1_path: Path, out_path: Path) -> Path:
@@ -140,7 +134,7 @@ def skull_strip(t1_path: Path, out_path: Path) -> Path:
 
     run_hd_bet(
         str(t1_path),
-        str(out_path),  # KEEP .nii.gz
+        str(out_path), # KEEP .nii.gz
         mode="fast",
         device="cpu",
         do_tta=False,
@@ -152,8 +146,7 @@ def skull_strip(t1_path: Path, out_path: Path) -> Path:
 
     return out_path
 
-
-# Step 2 — Registration to MNI152
+# Registration to MNI152
 
 # Registers the skull-stripped scan to MNI152 standard space using ANTsPy affine transform
 def register_to_mni(stripped_path: Path, out_path: Path, mni_template: Path) -> Path:
@@ -173,14 +166,13 @@ def register_to_mni(stripped_path: Path, out_path: Path, mni_template: Path) -> 
     reg = ants.registration(
         fixed=fixed,
         moving=moving,
-        type_of_transform="Affine",  # linear — faster, appropriate for structural MRI
+        type_of_transform="Affine", # linear is faster, appropriate for structural MRI
     )
 
     ants.image_write(reg["warpedmovout"], str(out_path))
     return out_path
 
-
-# Step 3 — Bias field correction
+# Bias field correction
 
 # Runs N4 bias field correction using ANTsPy on the registered scan
 def correct_bias_field(registered_path: Path, out_path: Path) -> Path:
@@ -199,10 +191,9 @@ def correct_bias_field(registered_path: Path, out_path: Path) -> Path:
     ants.image_write(corrected, str(out_path))
     return out_path
 
+# ComBat harmonization
 
-# Step 4 — ComBat harmonization
-
-# Runs ComBat across scanner sites and returns a dict of subject_id → harmonized numpy volume
+# Runs ComBat across scanner sites and returns a dict of subject_id, harmonized numpy volume
 def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     try:
         from neuroCombat import neuroCombat
@@ -233,11 +224,11 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     feature_matrix = np.array([
         [arr[:, :, z].mean() for z in range(n_slices_z)]
         for arr in all_arrs
-    ]).T  # shape: (n_slices_z, n_subjects)
+    ]).T # shape: (n_slices_z, n_subjects)
 
     # Build covariates
     subj_df = subjects_df[subjects_df["subject_id"].isin(valid_ids)].set_index("subject_id")
-    subj_df = subj_df.loc[valid_ids]  # preserve order
+    subj_df = subj_df.loc[valid_ids] # preserve order
     batch = subj_df["site"].values
     covars_df = pd.DataFrame({
         "diagnosis": subj_df["label"].values,
@@ -247,15 +238,15 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     combat_out = neuroCombat(
         dat=feature_matrix,
         covars=covars_df,
-        batch_col="diagnosis",  # preserve diagnosis effect
+        batch_col="diagnosis", # preserve diagnosis effect
         categorical_cols=["diagnosis"],
     )
 
     # Scale each volume by the ratio of harmonized to original mean per slice
     harmonized_volumes = {}
     for i, subj in enumerate(valid_ids):
-        orig_means = feature_matrix[:, i]  # (n_slices_z,)
-        combat_means = combat_out["data"][:, i]  # (n_slices_z,)
+        orig_means = feature_matrix[:, i] # (n_slices_z,)
+        combat_means = combat_out["data"][:, i] # (n_slices_z,)
         # Avoid division by zero
         ratio = np.where(orig_means != 0, combat_means / orig_means, 1.0)
         arr = volumes[subj].copy()
@@ -266,8 +257,7 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     log.info("ComBat harmonization complete.")
     return harmonized_volumes
 
-
-# Step 5 — Z-score normalization
+# Z-score normalization
 
 # Z-score normalizes a 3D volume using only brain voxels (non-zero mask)
 def zscore_normalize(volume: np.ndarray) -> np.ndarray:
@@ -280,8 +270,7 @@ def zscore_normalize(volume: np.ndarray) -> np.ndarray:
     normalized[mask] = (volume[mask] - mean) / std
     return normalized
 
-
-# Step 6 — Slice extraction
+# Slice extraction
 
 # Extracts the middle n_slices axial slices from a volume and saves them as 256x256 PNGs
 def extract_slices(
@@ -326,7 +315,6 @@ def extract_slices(
 
     return saved
 
-
 # Download MNI template
 
 # Downloads MNI152 1mm template if not already present
@@ -346,7 +334,6 @@ def get_mni_template(template_dir: Path) -> Path:
     log.info(f"MNI152 template saved to {template_path}")
     return template_path
 
-
 # Main pipeline
 
 # Runs the full preprocessing pipeline for all subjects
@@ -361,7 +348,7 @@ def run_pipeline(args):
     out_dir.mkdir(parents=True, exist_ok=True)
     slices_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step 0: Collect subjects
+    # Collect subjects
     subjects_df = collect_subjects(ucla_dir, cobre_dir, nusdast_dir)
     if args.test_run:
         subjects_df = subjects_df.sample(n=min(10, len(subjects_df)),
@@ -374,7 +361,7 @@ def run_pipeline(args):
     # Get MNI template
     mni_template = get_mni_template(template_dir)
 
-    # Steps 1–3: Per-subject preprocessing
+    # Per-subject preprocessing
     log.info("Starting per-subject preprocessing (skull strip → register → bias correct)...")
     failed = []
 
@@ -385,15 +372,15 @@ def run_pipeline(args):
         subj_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Step 1: Skull stripping
+            # Skull stripping
             stripped_path = subj_dir / "skull_stripped.nii.gz"
             skull_strip(t1_path, stripped_path)
 
-            # Step 2: Registration to MNI152
+            # Registration to MNI152
             registered_path = subj_dir / "registered.nii.gz"
             register_to_mni(stripped_path, registered_path, mni_template)
 
-            # Step 3: Bias field correction
+            # Bias field correction
             bias_path = subj_dir / "bias_corrected.nii.gz"
             correct_bias_field(registered_path, bias_path)
 
@@ -406,11 +393,11 @@ def run_pipeline(args):
         log.warning(f"{len(failed)} subjects failed preprocessing: {failed}")
         subjects_df = subjects_df[~subjects_df["subject_id"].isin(failed)]
 
-    # Step 4: ComBat harmonization
+    # ComBat harmonization
     log.info("Running ComBat harmonization...")
     harmonized_volumes = combat_harmonize(subjects_df, out_dir)
 
-    # Steps 5–6: Normalize and extract slices
+    # Normalize and extract slices
     log.info("Normalizing and extracting slices...")
     slice_manifest = []
 
@@ -422,10 +409,10 @@ def run_pipeline(args):
             log.warning(f"No harmonized volume for {subj}, skipping slice extraction")
             continue
 
-        # Step 5: z-score normalize
+        # Z-score normalize
         volume = zscore_normalize(harmonized_volumes[subj])
 
-        # Step 6: extract slices → PNG
+        # Extract slices → PNG
         saved_paths = extract_slices(volume, subj, label, slices_dir)
         for p in saved_paths:
             slice_manifest.append({
