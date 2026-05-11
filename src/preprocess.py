@@ -1,28 +1,6 @@
-"""
-preprocess.py
-=============
-Full preprocessing pipeline for schizophrenia MRI classification project.
-Datasets: UCLA CNP (ds000030) + COBRE (ds000115)
-
-Pipeline steps:
-    1. Skull stripping     — HD-BET
-    2. Registration        — ANTsPy (MNI152 standard space)
-    3. Bias field correction — ANTsPy N4
-    4. ComBat harmonization — neuroCombat (across scanner sites)
-    5. Intensity normalization — z-score per scan
-    6. Slice extraction    — middle 70 axial slices → 256x256 PNG
-
-Usage:
-    python preprocess.py \
-        --ucla_dir  ~/Downloads/schizophrenia_project/data/raw/ucla_cnp \
-        --cobre_dir ~/Downloads/schizophrenia_project/data/raw/cobre \
-        --out_dir   ~/Downloads/schizophrenia_project/data/preprocessed \
-        --slices_dir ~/Downloads/schizophrenia_project/data/slices \
-        --n_jobs 4
-
-Requirements:
-    pip install hd-bet antspyx neuroCombat nibabel numpy Pillow tqdm pandas
-"""
+# Full MRI preprocessing pipeline: skull stripping → registration → bias correction →
+# ComBat harmonization → z-score normalization → slice extraction
+# Datasets: UCLA CNP (ds000030) + COBRE (ds000115)
 
 import os
 import argparse
@@ -36,7 +14,6 @@ import pandas as pd
 from PIL import Image
 from tqdm import tqdm
 
-# ── lazy imports (heavy libraries) ──────────────────────────────────────────
 # imported inside functions so the script can be inspected without full env
 
 
@@ -47,9 +24,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTS
-# ─────────────────────────────────────────────────────────────────────────────
+# Constants
 
 SLICE_AXIS = 2  # axial = z-axis
 N_SLICES = 70  # number of middle slices to extract
@@ -63,27 +38,14 @@ SCZ_LABEL = "SCHZ"
 HC_LABEL = "CONTROL"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 0 — COLLECT SUBJECTS
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 0 — Collect subjects
 
+# Walks dataset directories and builds a subject table with subject_id, t1_path, label, site, dataset
 def collect_subjects(ucla_dir: Path, cobre_dir: Path, nusdast_dir: Path = None) -> pd.DataFrame:
-    """
-    Walk dataset directories and build a master subject table with columns:
-        subject_id, t1_path, label (0=HC, 1=SCZ), site, dataset
-
-    All three datasets use unified UCLA diagnostic codes (SCHZ / CONTROL)
-    in their cleaned participants TSV files:
-        participants_ucla_cleaned.tsv
-        participants_cobre_cleaned.tsv
-        participants_nusdast_cleaned.tsv
-
-    nusdast_dir is optional — pass None to skip if not yet downloaded.
-    """
     records = []
 
+    # Shared parsing logic for all three datasets
     def _parse_dataset(data_dir: Path, tsv_name: str, site: str, dataset: str):
-        """Shared parsing logic for all three datasets."""
         tsv_path = data_dir / tsv_name
         if not tsv_path.exists():
             log.warning(f"{tsv_name} not found in {data_dir} — skipping {site}")
@@ -145,7 +107,7 @@ def collect_subjects(ucla_dir: Path, cobre_dir: Path, nusdast_dir: Path = None) 
 
         log.info(f"  {site}: loaded {found} subjects from {tsv_name}")
 
-    # ── Parse all three datasets ──────────────────────────────────────────
+    # Parse all three datasets
     _parse_dataset(ucla_dir, "participants_ucla_cleaned.tsv", "UCLA", "ucla_cnp")
     _parse_dataset(cobre_dir, "participants_cobre_cleaned.tsv", "COBRE", "cobre")
     if nusdast_dir is not None and nusdast_dir.exists():
@@ -162,15 +124,10 @@ def collect_subjects(ucla_dir: Path, cobre_dir: Path, nusdast_dir: Path = None) 
     return df
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 — SKULL STRIPPING (HD-BET)
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 1 — Skull stripping
 
+# Runs HD-BET skull stripping and returns path to the brain-extracted file
 def skull_strip(t1_path: Path, out_path: Path) -> Path:
-    """
-    Run HD-BET skull stripping.
-    Returns path to the brain-extracted file.
-    """
     if out_path.exists():
         return out_path
 
@@ -196,14 +153,10 @@ def skull_strip(t1_path: Path, out_path: Path) -> Path:
     return out_path
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — REGISTRATION TO MNI152 (ANTsPy)
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 2 — Registration to MNI152
 
+# Registers the skull-stripped scan to MNI152 standard space using ANTsPy affine transform
 def register_to_mni(stripped_path: Path, out_path: Path, mni_template: Path) -> Path:
-    """
-    Linear registration (affine) to MNI152 space using ANTsPy.
-    """
     if out_path.exists():
         return out_path
 
@@ -227,15 +180,10 @@ def register_to_mni(stripped_path: Path, out_path: Path, mni_template: Path) -> 
     return out_path
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — BIAS FIELD CORRECTION (ANTsPy N4)
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 3 — Bias field correction
 
+# Runs N4 bias field correction using ANTsPy on the registered scan
 def correct_bias_field(registered_path: Path, out_path: Path) -> Path:
-    """
-    N4 bias field correction using ANTsPy.
-    Run AFTER registration so the mask geometry matches.
-    """
     if out_path.exists():
         return out_path
 
@@ -252,20 +200,10 @@ def correct_bias_field(registered_path: Path, out_path: Path) -> Path:
     return out_path
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 — COMBAT HARMONIZATION
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 4 — ComBat harmonization
 
+# Runs ComBat across scanner sites and returns a dict of subject_id → harmonized numpy volume
 def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
-    """
-    Run ComBat harmonization across scanner sites.
-
-    ComBat operates on a (features x subjects) matrix. Here each 'feature'
-    is the mean intensity of one axial slice — a simple but standard
-    approach for harmonizing before slice extraction.
-
-    Returns a dict: subject_id -> harmonized numpy volume array
-    """
     try:
         from neuroCombat import neuroCombat
     except ImportError:
@@ -329,12 +267,10 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     return harmonized_volumes
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 — INTENSITY NORMALIZATION (z-score)
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 5 — Z-score normalization
 
+# Z-score normalizes a 3D volume using only brain voxels (non-zero mask)
 def zscore_normalize(volume: np.ndarray) -> np.ndarray:
-    """Z-score normalize a 3D volume using brain voxels only (non-zero mask)."""
     mask = volume > 0
     mean = volume[mask].mean()
     std = volume[mask].std()
@@ -345,10 +281,9 @@ def zscore_normalize(volume: np.ndarray) -> np.ndarray:
     return normalized
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 6 — SLICE EXTRACTION → PNG
-# ─────────────────────────────────────────────────────────────────────────────
+# Step 6 — Slice extraction
 
+# Extracts the middle n_slices axial slices from a volume and saves them as 256x256 PNGs
 def extract_slices(
         volume: np.ndarray,
         subject_id: str,
@@ -357,11 +292,6 @@ def extract_slices(
         n_slices: int = N_SLICES,
         out_size: tuple = OUT_SIZE,
 ) -> list:
-    """
-    Extract the middle `n_slices` axial slices from a 3D volume.
-    Saves each as a 256x256 PNG into slices_dir/healthy/ or slices_dir/schizophrenia/.
-    Returns list of saved file paths.
-    """
     class_name = "schizophrenia" if label == 1 else "healthy"
     out_dir = slices_dir / class_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -397,12 +327,10 @@ def extract_slices(
     return saved
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DOWNLOAD MNI TEMPLATE IF NEEDED
-# ─────────────────────────────────────────────────────────────────────────────
+# Download MNI template
 
+# Downloads MNI152 1mm template if not already present
 def get_mni_template(template_dir: Path) -> Path:
-    """Download MNI152 1mm template if not already present."""
     import urllib.request
     template_path = template_dir / "MNI152_T1_1mm_brain.nii.gz"
     if template_path.exists():
@@ -419,10 +347,9 @@ def get_mni_template(template_dir: Path) -> Path:
     return template_path
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
+# Main pipeline
 
+# Runs the full preprocessing pipeline for all subjects
 def run_pipeline(args):
     ucla_dir = Path(args.ucla_dir).expanduser()
     cobre_dir = Path(args.cobre_dir).expanduser()
@@ -434,7 +361,7 @@ def run_pipeline(args):
     out_dir.mkdir(parents=True, exist_ok=True)
     slices_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Step 0: Collect subjects ──────────────────────────────────────────
+    # Step 0: Collect subjects
     subjects_df = collect_subjects(ucla_dir, cobre_dir, nusdast_dir)
     if args.test_run:
         subjects_df = subjects_df.sample(n=min(10, len(subjects_df)),
@@ -444,10 +371,10 @@ def run_pipeline(args):
     subjects_df.to_csv(out_dir / "subjects.csv", index=False)
     log.info(f"Subject manifest saved to {out_dir / 'subjects.csv'}")
 
-    # ── Get MNI template ─────────────────────────────────────────────────
+    # Get MNI template
     mni_template = get_mni_template(template_dir)
 
-    # ── Steps 1–3: Per-subject preprocessing ─────────────────────────────
+    # Steps 1–3: Per-subject preprocessing
     log.info("Starting per-subject preprocessing (skull strip → register → bias correct)...")
     failed = []
 
@@ -479,11 +406,11 @@ def run_pipeline(args):
         log.warning(f"{len(failed)} subjects failed preprocessing: {failed}")
         subjects_df = subjects_df[~subjects_df["subject_id"].isin(failed)]
 
-    # ── Step 4: ComBat harmonization ──────────────────────────────────────
+    # Step 4: ComBat harmonization
     log.info("Running ComBat harmonization...")
     harmonized_volumes = combat_harmonize(subjects_df, out_dir)
 
-    # ── Steps 5–6: Normalize and extract slices ───────────────────────────
+    # Steps 5–6: Normalize and extract slices
     log.info("Normalizing and extracting slices...")
     slice_manifest = []
 
@@ -519,9 +446,7 @@ def run_pipeline(args):
     log.info("Preprocessing complete.")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
+# Entry point
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MRI Preprocessing Pipeline")
