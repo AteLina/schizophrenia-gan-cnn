@@ -1,6 +1,20 @@
-# Converts already-preprocessed bias_corrected.nii.gz files into 256x256 PNG slices
-# Use this when preprocessing was interrupted — it picks up from whatever is already done
+"""
+Converts already-preprocessed bias_corrected.nii.gz files into 256x256 PNG slices.
+Use this when preprocessing was interrupted — it picks up from whatever is already done.
 
+Pipeline steps:
+    1. Find completed subjects    — scan preprocessed_dir for bias_corrected.nii.gz
+    2. ComBat harmonization       — neuroCombat (across scanner sites)
+    3. Z-score normalization      — per scan
+    4. Slice extraction           — middle 70 axial slices → 256x256 PNG
+
+Usage:
+    python make_slices.py \
+        --preprocessed_dir data/preprocessed \
+        --slices_dir       data/slices
+"""
+
+# Imports
 import argparse
 import logging
 from pathlib import Path
