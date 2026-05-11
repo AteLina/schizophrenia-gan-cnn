@@ -38,7 +38,7 @@ N_SLICES    = 70
 OUT_SIZE    = (256, 256)
 RANDOM_SEED = 42
 
-# Step 1 — Find completed subjects
+# Find completed subjects
 
 # Scans preprocessed_dir for finished subjects and joins with subjects.csv to get labels and site
 def find_completed_subjects(preprocessed_dir: Path, subjects_csv: Path) -> pd.DataFrame:
@@ -71,7 +71,7 @@ def find_completed_subjects(preprocessed_dir: Path, subjects_csv: Path) -> pd.Da
     return completed_df
 
 
-# Step 2 — ComBat harmonization
+# ComBat harmonization
 
 # Runs ComBat across scanner sites and returns a dict of subject_id → harmonized numpy volume
 def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
@@ -97,7 +97,7 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     if not valid_ids:
         raise RuntimeError("No valid volumes found.")
 
-    # Check if we have more than one site — ComBat requires at least 2 batches
+    # Check if we have more than one site (ComBat requires at least 2 batches)
     subj_df  = subjects_df[subjects_df["subject_id"].isin(valid_ids)].set_index("subject_id")
     subj_df  = subj_df.loc[valid_ids]
     sites    = subj_df["site"].values
@@ -116,7 +116,7 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     feature_matrix = np.array([
         [arr[:, :, z].mean() for z in range(n_slices_z)]
         for arr in all_arrs
-    ]).T  # shape: (n_slices_z, n_subjects)
+    ]).T # shape: (n_slices_z, n_subjects)
 
     covars_df = pd.DataFrame({
         "diagnosis": subj_df["label"].values,
@@ -150,8 +150,7 @@ def combat_harmonize(subjects_df: pd.DataFrame, preprocessed_dir: Path) -> dict:
     log.info("ComBat harmonization complete.")
     return harmonized
 
-
-# Step 3 — Z-score normalization
+# Z-score normalization
 
 # Z-score normalizes a 3D volume using only brain voxels (non-zero mask)
 def zscore_normalize(volume: np.ndarray) -> np.ndarray:
@@ -166,8 +165,7 @@ def zscore_normalize(volume: np.ndarray) -> np.ndarray:
     normalized[mask] = (volume[mask] - mean) / std
     return normalized
 
-
-# Step 4 — Slice extraction
+# Slice extraction
 
 # Extracts the middle n_slices axial slices from a volume and saves them as 256x256 PNGs
 def extract_slices(
@@ -209,7 +207,6 @@ def extract_slices(
 
     return saved
 
-
 # Main
 
 # Orchestrates all steps: find subjects, harmonize, normalize, extract slices, save manifest
@@ -220,18 +217,18 @@ def run(args):
 
     slices_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Find completed subjects
+    # Find completed subjects
     subjects_df = find_completed_subjects(preprocessed_dir, subjects_csv)
 
     if len(subjects_df) == 0:
         log.error("No completed subjects found. Check your preprocessed_dir path.")
         return
 
-    # Step 2: ComBat harmonization
+    # ComBat harmonization
     log.info("Running ComBat harmonization...")
     harmonized_volumes = combat_harmonize(subjects_df, preprocessed_dir)
 
-    # Steps 3-4: Normalize and extract slices
+    # Normalize and extract slices
     log.info("Normalizing and extracting slices...")
     slice_manifest = []
 
